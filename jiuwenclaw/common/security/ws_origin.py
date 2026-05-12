@@ -11,19 +11,20 @@ from urllib.parse import urlsplit
 
 _ENABLE_ORIGIN_CHECK_ENV = "JIUWENCLAW_ENABLE_ORIGIN_CHECK"
 _ALLOWED_ORIGIN_HOSTS_ENV = "JIUWENCLAW_WS_ALLOWED_ORIGIN_HOSTS"
+_DEPLOY_HOST_ENV = "JIUWENCLAW_WS_DEPLOY_HOST"
 _FORBIDDEN_BODY = b"Forbidden: Origin not allowed\n"
 
-# SECURITY (Sanmarcsoft hardening 2026-05-12, RedTeam F6):
+# SECURITY (Sanmarcsoft hardening 2026-05-12, RedTeam F6 + de-hardcoding fix):
 # Upstream made the Origin check opt-in (default disabled). That leaves the
 # WebSocket endpoint exposed to cross-site WebSocket hijacking (CSWSH).
 # We invert the default: the check is ON unless explicitly disabled.
-# Sensible default allowlist for the Sanmarcsoft deployment; operators
-# extend via JIUWENCLAW_WS_ALLOWED_ORIGIN_HOSTS env var.
-_DEFAULT_ALLOWED_ORIGIN_HOSTS = (
-    "localhost",
-    "127.0.0.1",
-    "haus.matthewstevens.org",
-)
+#
+# Default allowlist:
+#   - Always: localhost, 127.0.0.1
+#   - Plus: the value of JIUWENCLAW_WS_DEPLOY_HOST if set (deployment hostname)
+# Operators can override the entire allowlist by setting
+# JIUWENCLAW_WS_ALLOWED_ORIGIN_HOSTS as a comma-separated list.
+_BUILTIN_LOCAL_HOSTS = ("localhost", "127.0.0.1")
 
 
 def is_origin_check_enabled() -> bool:
@@ -43,15 +44,23 @@ def is_origin_check_enabled() -> bool:
 def get_allowed_origin_hosts() -> set[str]:
     """Return the WebSocket Origin hostname allowlist.
 
-    Sanmarcsoft (RedTeam F6): when env var unset, fall back to a sensible
-    default covering localhost + the production deploy host. Operators
-    extend by setting the env var; setting an empty value yields an empty
-    allowlist, which fail-closes the endpoint.
+    Sanmarcsoft (RedTeam F6 + de-hardcoding): when JIUWENCLAW_WS_ALLOWED_ORIGIN_HOSTS
+    is unset, fall back to localhost + 127.0.0.1 plus the value of
+    JIUWENCLAW_WS_DEPLOY_HOST if that env var is set. No production
+    hostname is source-coded. Operators MUST set JIUWENCLAW_WS_DEPLOY_HOST
+    or the explicit allowlist for any non-localhost browser to connect.
+
+    Setting the explicit allowlist to an empty string yields an empty set
+    (fail-closed) — operator intent honored.
     """
     raw = os.getenv(_ALLOWED_ORIGIN_HOSTS_ENV)
-    if raw is None:
-        return {h.lower() for h in _DEFAULT_ALLOWED_ORIGIN_HOSTS}
-    return {item.strip().lower() for item in raw.split(",") if item.strip()}
+    if raw is not None:
+        return {item.strip().lower() for item in raw.split(",") if item.strip()}
+    hosts = {h.lower() for h in _BUILTIN_LOCAL_HOSTS}
+    deploy_host = os.getenv(_DEPLOY_HOST_ENV, "").strip().lower()
+    if deploy_host:
+        hosts.add(deploy_host)
+    return hosts
 
 
 def is_allowed_browser_origin(origin: str | None) -> bool:

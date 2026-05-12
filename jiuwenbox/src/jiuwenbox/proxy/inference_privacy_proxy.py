@@ -158,20 +158,23 @@ class InferencePrivacyProxy:
     def _get_ssl_context(self, route: ProxyRoute) -> ssl.SSLContext:
         """Get or create SSL context for a route.
 
-        SECURITY (Sanmarcsoft hardening 2026-05-12, RedTeam F2):
+        SECURITY (Sanmarcsoft hardening 2026-05-12, RedTeam F2 + cache fix):
         A "privacy" proxy that bypasses TLS verification is a contradiction.
         Upstream let any ProxyRoute config silently downgrade the privacy
-        guarantee. We now require an explicit, repo-level operator opt-in via
-        JIUWENBOX_ALLOW_INSECURE_PROXY_ROUTES=1. Without it, route configs
-        with skip_cert_verify=True log a warning AND are downgraded to full
-        verification at runtime — fail-secure regardless of config drift.
+        guarantee. We require explicit operator opt-in via
+        JIUWENBOX_ALLOW_INSECURE_PROXY_ROUTES=1.
+
+        Cache invariance: the cache key is (path_prefix, allow_insecure_state)
+        so a mid-process env-var toggle produces a distinct cached context
+        (no stale-context concern). Both code paths log loudly.
         """
-        if route.path_prefix not in self._ssl_contexts:
+        allow_insecure = os.environ.get(
+            "JIUWENBOX_ALLOW_INSECURE_PROXY_ROUTES", ""
+        ).strip().lower() in {"1", "true", "yes", "on", "enabled"}
+        cache_key = (route.path_prefix, allow_insecure)
+        if cache_key not in self._ssl_contexts:
             ctx = ssl.create_default_context()
             if route.skip_cert_verify:
-                allow_insecure = os.environ.get(
-                    "JIUWENBOX_ALLOW_INSECURE_PROXY_ROUTES", ""
-                ).strip().lower() in {"1", "true", "yes", "on", "enabled"}
                 if allow_insecure:
                     logger.warning(
                         "[security] proxy route %s configured with skip_cert_verify=True "
@@ -190,8 +193,8 @@ class InferencePrivacyProxy:
                         "var to honor the config.",
                         route.path_prefix,
                     )
-            self._ssl_contexts[route.path_prefix] = ctx
-        return self._ssl_contexts[route.path_prefix]
+            self._ssl_contexts[cache_key] = ctx
+        return self._ssl_contexts[cache_key]
 
     def _match_route(self, path: str) -> ProxyRoute | None:
         """Match request path to the longest matching enabled route.
