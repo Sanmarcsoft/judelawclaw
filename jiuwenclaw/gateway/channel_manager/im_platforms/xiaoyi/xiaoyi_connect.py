@@ -535,8 +535,31 @@ class XiaoyiChannel(BaseChannel):
 
         ssl_context = ssl.create_default_context()
         if is_ip:
-            ssl_context.check_hostname = False
-            ssl_context.verify_mode = ssl.CERT_NONE
+            # SECURITY (Sanmarcsoft post-merge gateway/channel RedTeam,
+            # GW-MEDIUM-1 / CH-LOW-E): upstream silently disabled TLS
+            # verification for any IP-hosted Xiaoyi WS URL. Now gated
+            # behind explicit env var; default is full verification.
+            insecure = (
+                os.environ.get("JIUWENCLAW_XIAOYI_INSECURE_TLS", "").strip().lower()
+                in {"1", "true", "yes", "on", "enabled"}
+                or os.environ.get("JIUWENCLAW_INSECURE_SKILL_DOWNLOADS", "").strip().lower()
+                in {"1", "true", "yes", "on", "enabled"}
+            )
+            if insecure:
+                logger.warning(
+                    "[XiaoyiChannel] IP host %s with TLS DISABLED — MITM-exploitable. "
+                    "Production must use a hostname-based URL.",
+                    parsed.hostname,
+                )
+                ssl_context.check_hostname = False
+                ssl_context.verify_mode = ssl.CERT_NONE
+            else:
+                logger.warning(
+                    "[XiaoyiChannel] IP host %s — TLS check kept ON. Connection "
+                    "will fail unless cert SAN matches the IP. Set "
+                    "JIUWENCLAW_XIAOYI_INSECURE_TLS=1 to revert to upstream behaviour.",
+                    parsed.hostname,
+                )
 
         async with websockets.connect(
                 url,
