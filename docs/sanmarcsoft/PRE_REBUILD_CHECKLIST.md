@@ -56,24 +56,21 @@ If the deployment uses a Nix flake build instead of a Docker tag, the
 equivalent is to record the current `flake.lock` SHA in
 `MEMORY/RESEARCH/openclaw-rollback-2026-05-12.lock` before rebuilding.
 
-### 3. ChromaDB audit of `agent_zorin_memory` (RedTeam D1/D2)
+### 3. ChromaDB audit of `agent_zorin_memory` — ~~required~~ CLOSED BY NULL RESULT
 
-The synced upstream commit `24d8dbd8` fixes a memory-system sensitive-info
-filter that was broken in the version Zorin has been running until now.
-Anything Zorin wrote into `agent_zorin_memory` may contain unredacted
-prompts, credentials, or PII.
+**Closed 2026-05-12 by live recon** (see `MEMORY/RESEARCH/judeopenclaw-live-recon-2026-05-12.md` E1).
 
-**Required:** before the rebuild, query the collection for high-entropy
-strings, API-key patterns, and email addresses, and either redact or
-delete the offending entries.
+The collection `agent_zorin_memory` exists but holds **0 entries**. The
+pre-fix sensitive-info-filter bug never landed any data into our
+deployment because Autonomous Zorin never wrote to its memory
+collection. The leak risk Q's RedTeam D1/D2 raised is empirically
+absent. **No pre-rebuild action required on this gate.**
 
-```sh
-# From the PAI host:
-curl -s http://10.0.0.12:18000/api/v2/tenants/default_tenant/databases/default_database/collections \
-  | jq '.[] | select(.name=="agent_zorin_memory")'
-```
-
-This audit is Zorin's responsibility — do not delegate.
+Background retained for traceability: the synced upstream commit
+`24d8dbd8` fixes a memory-system sensitive-info filter that was broken
+in the prior version. The fix is positive-signal for upstream users; it
+changes nothing in our deployed posture because nothing was ever
+written through the broken filter.
 
 ### 4. Persistent volume preservation (RedTeam G3)
 
@@ -142,13 +139,18 @@ action beyond merging the branch into `develop` before rebuild.
 |---|---|---|
 | A1 — gitcode.com mutable dep | Pinned to SHA `3d1334c4` | `pyproject.toml` |
 | B2/C3 — Huawei OBS skill bucket | Fail-closed allowlist defaults | `jiuwenclaw/server/runtime/skill/skill_manager.py` |
-| C1/C2 — audit-write for tool dispatch | New audit module (Python port) | `jiuwenclaw/security/audit.py` |
+| C1/C2 — audit-write for tool dispatch (module) | Python port of `audit.mjs` | `jiuwenclaw/security/audit.py` |
+| C1/C2 — audit-write for tool dispatch (wiring) | `@audited` decorator at 9 dispatch sites | `command_tools.py`, `memory_tools.py`, `search_tools.py`, `web_fetch_tools.py` |
 | G1/G5 — smoke test + rollback gate | 10-probe smoke script | `scripts/smoke_test_zorin.py` |
+| D1/D2 — pre-fix memory-leak audit | Closed by null result (count=0) | n/a — empirical |
 
-The audit module is **landed but not yet wired** into the tool dispatch
-sites (`command_tools.py`, `search_tools.py`, `web_fetch_tools.py`,
-`memory_tools.py`). Wiring is the second commit on this branch, to be
-landed before the rebuild promotes to production.
+Follow-up wiring passes (NOT in this branch yet):
+  - `audio_tools.py`, `image_tools.py`, `video_tools.py`, `browser_tools.py`,
+    `wiki_tools.py`, `task_tools.py`, `acp_output_tools.py` — wire after the
+    high-blast files (command/memory/web_fetch/search) prove out in a
+    throwaway VM.
+  - `xiaoyi_phone_tools/` subtree — distinct integration surface, warrants
+    its own audit-shape review before wiring.
 
 ---
 
