@@ -75,13 +75,31 @@ class MessageStore:
         """
         获取指定群聊的记忆文件路径。
 
+        SECURITY (Sanmarcsoft post-merge channel RedTeam, CH-MEDIUM-C):
+        chat_id is platform-supplied but could carry path-traversal sequences
+        if the platform is compromised or misconfigured (e.g. Feishu bug
+        returning '../../etc/passwd'). Sanitize to alnum/underscore/dash,
+        then realpath-confine to memory_dir.
+
         Args:
             chat_id: 群聊ID
 
         Returns:
             Path: 记忆文件路径
         """
-        return self._memory_dir / f"{chat_id}.json"
+        import re
+        safe_id = re.sub(r"[^A-Za-z0-9_\-]", "_", str(chat_id or ""))[:128]
+        if not safe_id:
+            safe_id = "unknown_chat"
+        candidate = (self._memory_dir / f"{safe_id}.json").resolve()
+        base = self._memory_dir.resolve()
+        # Containment check: even after symlink resolution, the file must
+        # live under the memory directory.
+        if not (candidate == base or str(candidate).startswith(str(base) + "/")):
+            raise ValueError(
+                f"chat_id={chat_id!r} resolves outside memory_dir; refused"
+            )
+        return candidate
 
     def load_memory(self, chat_id: str | None = None) -> dict[str, list] | list:
         """

