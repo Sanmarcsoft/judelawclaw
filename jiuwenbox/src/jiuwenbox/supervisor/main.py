@@ -178,10 +178,29 @@ class Supervisor:
                 self._setup_landlock_launcher(config, Path(temp_dir))
 
                 # 2. Setup seccomp
-                try:
-                    self._setup_seccomp(config)
-                except Exception:
-                    logger.warning("Failed to setup seccomp, continuing without it", exc_info=True)
+                # SECURITY (Sanmarcsoft post-merge supervisor RedTeam,
+                # BOX-MEDIUM-1): honor policy.syscall.compatibility. Previously
+                # any setup failure was silently swallowed; an operator who
+                # required seccomp had no way to express that.
+                seccomp_compat = getattr(getattr(self.policy, "syscall", None), "compatibility", "best_effort")
+                if seccomp_compat == "disabled":
+                    logger.info("seccomp policy.syscall.compatibility=disabled; skipping setup")
+                else:
+                    try:
+                        self._setup_seccomp(config)
+                    except Exception:
+                        if seccomp_compat == "hard_requirement":
+                            logger.error(
+                                "seccomp setup failed AND policy.syscall.compatibility="
+                                "hard_requirement — aborting sandbox start",
+                                exc_info=True,
+                            )
+                            raise
+                        logger.warning(
+                            "Failed to setup seccomp, continuing without it "
+                            "(policy.syscall.compatibility=best_effort)",
+                            exc_info=True,
+                        )
 
                 # 3. Register signal handlers
                 loop = asyncio.get_running_loop()

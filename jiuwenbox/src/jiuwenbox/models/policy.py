@@ -185,6 +185,12 @@ class SyscallPolicy(BaseModel):
 
     x86_64: ArchitectureSyscallPolicy = Field(default_factory=ArchitectureSyscallPolicy)
     arm64: ArchitectureSyscallPolicy = Field(default_factory=ArchitectureSyscallPolicy)
+    # SECURITY (Sanmarcsoft post-merge supervisor RedTeam, BOX-MEDIUM-1):
+    # Match LandlockPolicy.compatibility shape. When set to
+    # "hard_requirement", a seccomp setup failure (e.g. memfd_create
+    # unavailable, kernel without seccomp) aborts sandbox startup
+    # rather than logging-and-continuing.
+    compatibility: Literal["disabled", "best_effort", "hard_requirement"] = "best_effort"
 
 
 class NetworkMode(str, enum.Enum):
