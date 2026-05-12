@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import inspect
 import logging
 import os
@@ -256,6 +257,51 @@ _FORWARD_NO_LOCAL_HANDLER_METHODS = frozenset({
     "extensions.toggle",
 })
 
+# SECURITY (Sanmarcsoft hardening 2026-05-12, post-merge channel/gateway RedTeam):
+# config.get returned ALL decrypted secrets to ANY connected WebSocket client.
+# config.set wrote arbitrary values to the .env file. Both methods had ZERO auth.
+# This adds:
+#   1. Param-key allowlist of secret-shaped names that get masked in config.get
+#      response (operators can verify presence without seeing the value).
+#   2. Bearer-token gate via JIUWENCLAW_WS_TOKEN env var. When set, every call
+#      to config.get / config.set / config.validate_model requires a matching
+#      _auth_token in params. When unset (legacy compat), a loud logger.warning
+#      is emitted at every config.get call so operators know the gate is off.
+_SECRET_PARAM_KEYS = frozenset({
+    "api_key", "video_api_key", "audio_api_key", "vision_api_key",
+    "embed_api_key", "jina_api_key", "bocha_api_key", "serper_api_key",
+    "perplexity_api_key", "github_token", "email_token",
+    "teamskills_user_token", "teamskills_system_token",
+})
+_SECRET_MASK = "***REDACTED***"
+
+
+def _ws_auth_passes(params: Any) -> bool:
+    """Return True if WS auth gate is disabled OR the supplied token matches.
+
+    Reads JIUWENCLAW_WS_TOKEN at call time so an operator who sets it
+    mid-process (then reloads handlers) gets the gate applied immediately.
+    Uses hmac.compare_digest to avoid timing-leak of the token.
+    """
+    expected = os.environ.get("JIUWENCLAW_WS_TOKEN", "").strip()
+    if not expected:
+        return True  # gate disabled
+    supplied = ""
+    if isinstance(params, dict):
+        supplied = str(params.get("_auth_token") or "").strip()
+    if not supplied:
+        return False
+    return hmac.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8"))
+
+
+def _mask_secrets_in_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Replace secret-shaped values with a fixed sentinel."""
+    return {
+        k: (_SECRET_MASK if (k in _SECRET_PARAM_KEYS and v) else v)
+        for k, v in payload.items()
+    }
+
+
 # 配置信息：config.get 返回、config.set 可修改的键（前端 param 名 -> 环境变量名）
 # default 模型 + video/audio/vision 多模型
 _CONFIG_SET_ENV_MAP = {
@@ -445,6 +491,21 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
     channel.on_connect(_on_connect)
 
     async def _config_get(ws, req_id, params, session_id):
+        # SECURITY (Sanmarcsoft post-merge channel/gateway RedTeam):
+        #   1. Require WS bearer token when JIUWENCLAW_WS_TOKEN is set.
+        #   2. Mask api_key/token-shaped values in the response.
+        # Without these, ANY unauthenticated WebSocket client received all
+        # decrypted secrets in plaintext (live exfiltration vector).
+        if not _ws_auth_passes(params):
+            await channel.send_response(
+                ws, req_id, ok=False, error="unauthorized", code="UNAUTHORIZED"
+            )
+            return
+        if not os.environ.get("JIUWENCLAW_WS_TOKEN", "").strip():
+            logger.warning(
+                "[config.get] JIUWENCLAW_WS_TOKEN unset — config endpoint is OPEN to "
+                "every connected WS client. Set the env var to enforce bearer-token auth."
+            )
         # 返回 _CONFIG_SET_ENV_MAP 里所有键对应的环境变量当前值
         payload = {
             param_key: (os.getenv(env_key) or "")
@@ -497,6 +558,8 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
             payload.setdefault("memory_forbidden_description", "")
             payload.setdefault("free_search_ddg_enabled", "false")
             payload.setdefault("free_search_bing_enabled", "false")
+        # SECURITY: mask secret-shaped values before sending to client.
+        payload = _mask_secrets_in_payload(payload)
         await channel.send_response(ws, req_id, ok=True, payload=payload)
 
     def _persist_env_updates(updates: dict[str, str]) -> None:
@@ -532,9 +595,20 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
 
     async def _config_set(ws, req_id, params, session_id):
         """根据前端消息内容更新配置（支持 .env 与 config.yaml 中的键），并写回对应文件。"""
+        # SECURITY (Sanmarcsoft post-merge channel/gateway RedTeam):
+        # Same bearer-token gate as config.get — config.set was a remote
+        # arbitrary-.env-write primitive before this commit.
+        if not _ws_auth_passes(params):
+            await channel.send_response(
+                ws, req_id, ok=False, error="unauthorized", code="UNAUTHORIZED"
+            )
+            return
         if not isinstance(params, dict):
             await channel.send_response(ws, req_id, ok=False, error="params must be object", code="BAD_REQUEST")
             return
+        # Strip auth marker from params before processing so it isn't
+        # written to .env or persisted to config.yaml.
+        params = {k: v for k, v in params.items() if k != "_auth_token"}
         for key, val in params.items():
             from jiuwenclaw.extensions.registry import ExtensionRegistry
             if (("api_key" in key.lower() or "token" in key.lower())
