@@ -13,17 +13,44 @@ _ENABLE_ORIGIN_CHECK_ENV = "JIUWENCLAW_ENABLE_ORIGIN_CHECK"
 _ALLOWED_ORIGIN_HOSTS_ENV = "JIUWENCLAW_WS_ALLOWED_ORIGIN_HOSTS"
 _FORBIDDEN_BODY = b"Forbidden: Origin not allowed\n"
 
+# SECURITY (Sanmarcsoft hardening 2026-05-12, RedTeam F6):
+# Upstream made the Origin check opt-in (default disabled). That leaves the
+# WebSocket endpoint exposed to cross-site WebSocket hijacking (CSWSH).
+# We invert the default: the check is ON unless explicitly disabled.
+# Sensible default allowlist for the Sanmarcsoft deployment; operators
+# extend via JIUWENCLAW_WS_ALLOWED_ORIGIN_HOSTS env var.
+_DEFAULT_ALLOWED_ORIGIN_HOSTS = (
+    "localhost",
+    "127.0.0.1",
+    "haus.matthewstevens.org",
+)
+
 
 def is_origin_check_enabled() -> bool:
-    """Return whether WebSocket Origin validation is enabled."""
-    return os.getenv(_ENABLE_ORIGIN_CHECK_ENV, "").strip() == "1"
+    """Return whether WebSocket Origin validation is enabled.
+
+    Default behaviour CHANGED from upstream (Sanmarcsoft RedTeam F6):
+      - Upstream: env var must equal "1" to enable.
+      - Sanmarcsoft: enabled unless env var is explicitly
+        "0" / "false" / "no" / "off" / "disabled".
+    """
+    raw = os.getenv(_ENABLE_ORIGIN_CHECK_ENV, "").strip().lower()
+    if raw in {"0", "false", "no", "off", "disabled"}:
+        return False
+    return True
 
 
 def get_allowed_origin_hosts() -> set[str]:
-    """Return the global WebSocket Origin hostname allowlist from environment."""
+    """Return the WebSocket Origin hostname allowlist.
+
+    Sanmarcsoft (RedTeam F6): when env var unset, fall back to a sensible
+    default covering localhost + the production deploy host. Operators
+    extend by setting the env var; setting an empty value yields an empty
+    allowlist, which fail-closes the endpoint.
+    """
     raw = os.getenv(_ALLOWED_ORIGIN_HOSTS_ENV)
     if raw is None:
-        return set()
+        return {h.lower() for h in _DEFAULT_ALLOWED_ORIGIN_HOSTS}
     return {item.strip().lower() for item in raw.split(",") if item.strip()}
 
 
