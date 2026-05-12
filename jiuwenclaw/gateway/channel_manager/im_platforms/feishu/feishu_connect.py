@@ -2187,6 +2187,22 @@ class FeishuChannel(BaseChannel):
             if sender.sender_type == "bot":
                 return
 
+            # SECURITY (Sanmarcsoft post-merge channel/gateway RedTeam, F-A / GW-HIGH-3):
+            # Enforce allow_from authorization. Upstream defined the field on
+            # FeishuConfig but never called is_allowed() in the inbound path,
+            # so every Feishu user reached the agent regardless of operator
+            # config. Match the pattern used by DingTalk / Discord / WeCom /
+            # Telegram / WhatsApp channels.
+            sender_open_id = (
+                str(getattr(getattr(sender, "sender_id", None), "open_id", "") or "").strip()
+            )
+            if not self.is_allowed(sender_open_id):
+                logger.warning(
+                    "[FeishuChannel] sender open_id=%s not in allow_from, rejected",
+                    sender_open_id or "(empty)",
+                )
+                return
+
             # 群聊数字分身模式下不自动点赞
             if not self.config.group_digital_avatar:
                 asyncio.create_task(self._add_reaction(message.message_id, "THUMBSUP"))

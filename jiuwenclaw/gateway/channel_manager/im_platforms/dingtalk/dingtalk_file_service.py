@@ -8,12 +8,53 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import os
 import re
 from typing import Any, Callable
+from urllib.parse import urlparse
 
 import httpx
 from loguru import logger
+
+
+# SECURITY (Sanmarcsoft post-merge channel RedTeam, F-B / CH-HIGH-B):
+# The DingTalk API returns a `downloadUrl` that the agent fetches without
+# any validation. If the upstream is compromised or returns a misshapen
+# URL, the agent can be coerced into fetching arbitrary internal services
+# (SSRF). Restrict downloads to HTTPS on Alibaba-DingTalk-hosted domains.
+_ALLOWED_DINGTALK_DOWNLOAD_HOSTS: tuple[str, ...] = (
+    "api.dingtalk.com",
+    "open-dingtalk.com",
+    "dingtalk.com",
+    "aliyuncs.com",  # DingTalk file CDN often uses AliCloud OSS
+)
+
+
+def _validate_dingtalk_download_url(url: str) -> bool:
+    """Return True if url is safe to fetch as a DingTalk file source.
+
+    Allows only https on known DingTalk/Aliyun hosts; rejects private,
+    loopback, link-local IPs and any other scheme.
+    """
+    try:
+        parsed = urlparse(url)
+    except (TypeError, ValueError):
+        return False
+    if parsed.scheme != "https":
+        return False
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return False
+    try:
+        addr = ipaddress.ip_address(host)
+        if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_multicast:
+            return False
+    except ValueError:
+        pass  # not an IP, hostname-based check below
+    if any(host == h or host.endswith("." + h) for h in _ALLOWED_DINGTALK_DOWNLOAD_HOSTS):
+        return True
+    return False
 
 
 # 文件魔数映射（用于格式检测）
@@ -197,6 +238,16 @@ class DingTalkFileService:
                     if attempt < max_retries - 1:
                         await asyncio.sleep(2 ** attempt)
                     continue
+
+                # SECURITY: validate the downloadUrl before fetching.
+                # The DingTalk API supplies this; an upstream compromise or
+                # misconfiguration could redirect it to an internal host.
+                if not _validate_dingtalk_download_url(download_url):
+                    logger.error(
+                        "[DingTalkFileService] downloadUrl rejected by SSRF guard: %s",
+                        download_url,
+                    )
+                    return None
 
                 # 第二步：GET 请求下载实际文件内容
                 download_response = await asyncio.wait_for(
