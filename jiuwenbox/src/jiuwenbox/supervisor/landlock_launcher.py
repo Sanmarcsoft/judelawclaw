@@ -247,6 +247,22 @@ def _run_daemon_in_process(daemon_path: str, payload: dict) -> int:
     except SyntaxError as exc:
         logger.error("Failed to compile daemon script %s: %s", daemon_path, exc)
         return 2
+    # SECURITY NOTE (Sanmarcsoft RedTeam F3, 2026-05-12 — analyzed, acceptable):
+    # exec() of compiled daemon source is by-design. Trust boundaries:
+    #   1. daemon_path comes from sys.argv[3], set by the supervisor's main.py
+    #      via Supervisor._setup_landlock_launcher() — operator-controlled
+    #      bwrap command line, not skill/agent-reachable.
+    #   2. The daemon script is bind-mounted read-only into the sandbox
+    #      (config.ro_binds in main.py). Skill code inside the sandbox
+    #      cannot overwrite the daemon path before this exec.
+    #   3. Landlock is applied AFTER reading daemon_source (line ~230) but
+    #      BEFORE this exec, so the daemon body inherits the landlock
+    #      restrictions for any further filesystem access.
+    #   4. /jiuwenbox subtree (where the daemon lives) is outside the
+    #      Landlock allowlist after this point, so user code spawned by
+    #      the daemon cannot read it back.
+    # Re-flag this exec only if (a) daemon_path becomes reachable from
+    # skill code, or (b) the bind-mount is changed from read-only to rw.
     exec(compiled, daemon_globals)
 
     daemon_main = daemon_globals.get("main")
