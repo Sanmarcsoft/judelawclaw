@@ -60,13 +60,19 @@ _FREE_SEARCH_DEFAULT_NO_PROXY = "127.0.0.1,.huawei.com,localhost,local,.local,10
 # Team Skills Hub（仅 TEAM_SKILLS_HUB_* 环境变量）
 _TEAM_SKILLS_HUB_MARKET_TIMEOUT: float = float(os.environ.get("TEAM_SKILLS_HUB_TIMEOUT", "60"))
 _TEAM_SKILLS_HUB_BASE_URL_DEFAULT = "https://teamskills.openjiuwen.com"
+# SECURITY (Sanmarcsoft hardening 2026-05-12): fail-closed allowlists for skill downloads.
+# Upstream defaults allowed Huawei OBS buckets, giving an external party (or anyone who
+# could push to a Huawei OBS bucket) an effective code-execution path into the agent VM
+# via the remote skill-import feature. We replace those defaults with localhost-only.
+# Operators who genuinely need remote skills set TEAM_SKILLS_HUB_ALLOWED_DOWNLOAD_HOSTS
+# or IMPORT_LOCAL_ALLOWED_DOWNLOAD_HOSTS env vars explicitly at deploy time.
+# See: MEMORY/RESEARCH/judelawclaw-sync-redteam-2026-05-12.md vectors B2 and C3.
 _TEAM_SKILLS_HUB_DEFAULT_ALLOWED_DOWNLOAD_HOSTS: tuple[str, ...] = (
-    "openjiuwen-market.obs.*.myhuaweicloud.com",
     "127.0.0.1",
     "localhost",
 )
 _IMPORT_LOCAL_REMOTE_TIMEOUT: float = float(os.environ.get("IMPORT_LOCAL_REMOTE_TIMEOUT", "60"))
-_IMPORT_LOCAL_DEFAULT_ALLOWED_DOWNLOAD_HOSTS: tuple[str, ...] = ("*.obs.*.myhuaweicloud.com",)
+_IMPORT_LOCAL_DEFAULT_ALLOWED_DOWNLOAD_HOSTS: tuple[str, ...] = ()
 
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
