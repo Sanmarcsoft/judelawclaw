@@ -221,18 +221,24 @@ syscall:
       - "acct"
 
 # Network policy. Egress controls outbound traffic; ingress controls inbound traffic.
+#
+# SECURITY (Sanmarcsoft post-merge supervisor RedTeam, BOX-MEDIUM-3):
+# Upstream defaulted to mode=host (sandbox shares host network ns) AND
+# egress.default=allow. That means a sandboxed skill could reach every
+# internal service the host can reach. Now: mode=isolated + default=deny;
+# operators who genuinely need host networking opt in explicitly.
 network:
   # mode:
   #   isolated: create a dedicated network namespace and apply these rules
   #   host: use host networking and skip namespace firewall setup
-  mode: host
+  mode: isolated
 
   # Outbound traffic from sandbox to outside destinations.
   egress:
     # default:
     #   deny: block traffic unless it matches allowed_domains/allowed_ips and allowed_ports
     #   allow: allow traffic unless it matches blocked_domains/blocked_ips/blocked_ports
-    default: allow
+    default: deny
 
     # Domain names allowed as outbound destinations. Wildcards like "*.example.com" are accepted
     # by resolving the base domain; rules are applied to resolved IPs.
@@ -250,8 +256,14 @@ network:
       - "::1/128"
 
     # IP/CIDR ranges blocked as outbound destinations. Block rules take precedence.
+    # Includes IMDS endpoints on AWS/GCE/Azure (169.254.169.254), Alibaba
+    # Cloud (100.100.100.200), and the IPv6 AWS IMDS (fd00:ec2::254) — all
+    # are classic SSRF metadata-exfil targets that have no business being
+    # reachable from a sandboxed skill.
     blocked_ips:
       - "169.254.169.254/32"
+      - "100.100.100.200/32"
+      - "fd00:ec2::254/128"
 
     # TCP destination ports allowed for outbound traffic when default is deny.
     allowed_ports:
