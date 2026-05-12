@@ -74,16 +74,39 @@ _TEAM_SKILLS_HUB_DEFAULT_ALLOWED_DOWNLOAD_HOSTS: tuple[str, ...] = (
 _IMPORT_LOCAL_REMOTE_TIMEOUT: float = float(os.environ.get("IMPORT_LOCAL_REMOTE_TIMEOUT", "60"))
 _IMPORT_LOCAL_DEFAULT_ALLOWED_DOWNLOAD_HOSTS: tuple[str, ...] = ()
 
+# SECURITY (Sanmarcsoft hardening 2026-05-12, post-merge RedTeam F1):
+# Upstream disabled TLS verification unconditionally for remote skill imports
+# (both via _ImportLocalTLSAdapter setting CERT_NONE + check_hostname=False AND
+# via a literal verify=False on the download requests.get call). Skill content
+# is executed code; MITM on the download path is arbitrary code execution.
+# We now require an explicit operator opt-in. Default: full TLS verification.
+_INSECURE_SKILL_DOWNLOADS_ENV = "JIUWENCLAW_INSECURE_SKILL_DOWNLOADS"
 
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+def _insecure_skill_downloads_enabled() -> bool:
+    raw = str(os.environ.get(_INSECURE_SKILL_DOWNLOADS_ENV, "") or "").strip().lower()
+    return raw in {"1", "true", "yes", "on", "enabled"}
+
+
+if _insecure_skill_downloads_enabled():
+    logger.warning(
+        "[security] %s is set — TLS verification is DISABLED on remote skill "
+        "downloads. Any host on the network path between this VM and the "
+        "configured skill source can substitute arbitrary code. This mode is "
+        "intended ONLY for development against self-signed mirrors and MUST "
+        "NOT be used in production.",
+        _INSECURE_SKILL_DOWNLOADS_ENV,
+    )
 
 
 class _ImportLocalTLSAdapter(HTTPAdapter):
     def init_poolmanager(self, *args, **kwargs):
         ctx = create_urllib3_context(ssl_version=ssl.PROTOCOL_TLS_CLIENT)
         ctx.minimum_version = ssl.TLSVersion.TLSv1_2
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
+        if _insecure_skill_downloads_enabled():
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         kwargs["ssl_context"] = ctx
         return super().init_poolmanager(*args, **kwargs)
 
@@ -142,7 +165,15 @@ def _get_free_search_proxy_url() -> str:
 
 
 def _free_search_ssl_verify() -> bool:
-    return _env_bool(_FREE_SEARCH_SSL_VERIFY_ENV, default=False)
+    # SECURITY (Sanmarcsoft hardening 2026-05-12, F1-adjacent):
+    # Upstream default was False (skip TLS verification on skillnet/free-search
+    # outbound HTTP). Flipped to True. Operators with a self-signed mirror set
+    # JIUWENCLAW_INSECURE_SKILL_DOWNLOADS=1 to override globally, or
+    # FREE_SEARCH_SSL_VERIFY=0 to override just this path.
+    return _env_bool(
+        _FREE_SEARCH_SSL_VERIFY_ENV,
+        default=not _insecure_skill_downloads_enabled(),
+    )
 
 
 def _disable_insecure_request_warning() -> None:
@@ -1961,12 +1992,15 @@ class SkillManager:
             with requests.Session() as session:
                 session.mount("https://", _ImportLocalTLSAdapter())
                 logger.info("[SkillManager] remote import downloading: url=%s", download_url)
+                # SECURITY (Sanmarcsoft hardening 2026-05-12, post-merge RedTeam F1):
+                # verify is True by default; can only be disabled via
+                # JIUWENCLAW_INSECURE_SKILL_DOWNLOADS=1 (loud startup warning).
                 with session.get(
                     download_url.strip(),
                     timeout=timeout,
                     stream=True,
                     allow_redirects=False,
-                    verify=False,
+                    verify=not _insecure_skill_downloads_enabled(),
                 ) as response:
                     response.raise_for_status()
                     chunks: list[bytes] = []
