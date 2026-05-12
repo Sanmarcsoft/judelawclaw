@@ -6,12 +6,14 @@ from __future__ import annotations
 import asyncio
 import hmac
 import inspect
+import ipaddress
 import logging
 import os
 import re
 import secrets
 import shutil
 import time
+from urllib.parse import urlparse as _urlparse_for_ssrf
 from dataclasses import dataclass
 from typing import Any
 
@@ -300,6 +302,43 @@ def _mask_secrets_in_payload(payload: dict[str, Any]) -> dict[str, Any]:
         k: (_SECRET_MASK if (k in _SECRET_PARAM_KEYS and v) else v)
         for k, v in payload.items()
     }
+
+
+# SECURITY (Sanmarcsoft post-merge gateway RedTeam, GW-HIGH-1):
+# config.validate_model accepted an api_base from the client and POSTed to
+# {api_base}/chat/completions with no scheme/host validation — SSRF surface.
+_BLOCKED_METADATA_HOSTS = frozenset({
+    "169.254.169.254",          # AWS/GCE/Azure IMDS
+    "100.100.100.200",          # Alibaba Cloud IMDS
+    "metadata.google.internal", # GCE alias
+})
+
+
+def _is_safe_outbound_api_base(url: str) -> bool:
+    """Return True if url is safe to make outbound LLM API calls to.
+
+    Rejects: non-http(s) schemes, cloud-metadata hostnames, private,
+    loopback, link-local and multicast IPs. Hostnames (DNS) are accepted;
+    egress filtering at the network layer is the operator's responsibility.
+    """
+    try:
+        parsed = _urlparse_for_ssrf(url)
+    except (TypeError, ValueError):
+        return False
+    if parsed.scheme not in ("http", "https"):
+        return False
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return False
+    if host in _BLOCKED_METADATA_HOSTS:
+        return False
+    try:
+        addr = ipaddress.ip_address(host)
+        if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_multicast:
+            return False
+    except ValueError:
+        pass  # hostname (DNS), accept
+    return True
 
 
 # 配置信息：config.get 返回、config.set 可修改的键（前端 param 名 -> 环境变量名）
@@ -719,6 +758,16 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
         Tries ``max_tokens=infimum_max_tokens`` first to limit cost; if the API rejects it (e.g. minimum output length),
         retries with ``max_tokens=supremum_max_tokens``.
         """
+        # SECURITY (Sanmarcsoft post-merge gateway RedTeam, GW-HIGH-1):
+        # Same bearer-token gate as config.get / config.set. Without it,
+        # the api_base param became an SSRF vector against the internal
+        # network from any unauthenticated client.
+        if not _ws_auth_passes(params):
+            await channel.send_response(
+                ws, req_id, ok=False, error="unauthorized", code="UNAUTHORIZED"
+            )
+            return
+
         if max_tokens_bounds is None:
             max_tokens_bounds = {
                 "infimum_max_tokens": 1,
@@ -736,6 +785,14 @@ def _register_web_handlers(bind: WebHandlersBindParams) -> None:
             await channel.send_response(ws, req_id, ok=False, error="params must be object", code="BAD_REQUEST")
             return
         api_base = str(params.get("api_base") or "").strip()
+        # SECURITY (GW-HIGH-1): reject api_base values that could SSRF.
+        if api_base and not _is_safe_outbound_api_base(api_base):
+            await channel.send_response(
+                ws, req_id, ok=False,
+                error="api_base rejected by SSRF guard (private/loopback/non-http)",
+                code="BAD_REQUEST",
+            )
+            return
         api_key = str(params.get("api_key") or "").strip()
         model = str(params.get("model") or "").strip()
         model_provider = str(params.get("model_provider") or "").strip()
