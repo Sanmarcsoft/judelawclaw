@@ -16,6 +16,30 @@ import urllib.parse
 from dataclasses import dataclass
 from typing import Any
 
+
+def _audit_a2x(tool_name: str, args: dict[str, Any], outcome: str, error_message: str | None = None) -> None:
+    """Fire-and-forget audit trail for a2x lifecycle operations.
+
+    SECURITY (Sanmarcsoft post-merge a2x RedTeam, A2X-HIGH-3):
+    a2x registry calls cross trust boundaries (this agent ↔ shared
+    registry ↔ other agents) but were not covered by the @audited
+    decorator pattern used for tool dispatch. Without this wrapping a
+    compromised teammate could register/replace/reserve cards with no
+    forensic trail. Calling here logs to the per-agent ChromaDB
+    collection alongside regular tool calls.
+    """
+    try:
+        from jiuwenclaw.security.audit import audit_tool_call
+
+        audit_tool_call(
+            tool_name=tool_name,
+            tool_args=args,
+            outcome=outcome,
+            error_message=error_message,
+        )
+    except Exception:  # pragma: no cover — audit must never break callers
+        logger.debug("[a2x audit] suppressed audit-write failure", exc_info=True)
+
 logger = logging.getLogger(__name__)
 
 _REGISTERED_BLANK_ENDPOINTS: set[tuple[str, str, str]] = set()
@@ -245,7 +269,16 @@ async def register_blank_agent_if_teammate(
         )
         return True
 
-    result = await client.register_blank_agent(dataset=dataset, endpoint=endpoint)
+    try:
+        result = await client.register_blank_agent(dataset=dataset, endpoint=endpoint)
+    except Exception as exc:
+        _audit_a2x(
+            "a2x.register_blank_agent",
+            {"dataset": dataset, "endpoint": endpoint, "source": source},
+            "error",
+            str(exc),
+        )
+        raise
     _REGISTERED_BLANK_ENDPOINTS.add(cache_key)
     _remember_blank_registration(
         client,
@@ -260,6 +293,16 @@ async def register_blank_agent_if_teammate(
         dataset,
         getattr(result, "service_id", ""),
         endpoint,
+    )
+    _audit_a2x(
+        "a2x.register_blank_agent",
+        {
+            "dataset": dataset,
+            "endpoint": endpoint,
+            "source": source,
+            "service_id": getattr(result, "service_id", ""),
+        },
+        "success",
     )
     return True
 
