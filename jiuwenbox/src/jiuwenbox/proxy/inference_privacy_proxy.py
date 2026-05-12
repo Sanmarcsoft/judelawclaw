@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 import ssl
 from dataclasses import dataclass, field
@@ -155,12 +156,40 @@ class InferencePrivacyProxy:
             self._log_callback(message)
 
     def _get_ssl_context(self, route: ProxyRoute) -> ssl.SSLContext:
-        """Get or create SSL context for a route."""
+        """Get or create SSL context for a route.
+
+        SECURITY (Sanmarcsoft hardening 2026-05-12, RedTeam F2):
+        A "privacy" proxy that bypasses TLS verification is a contradiction.
+        Upstream let any ProxyRoute config silently downgrade the privacy
+        guarantee. We now require an explicit, repo-level operator opt-in via
+        JIUWENBOX_ALLOW_INSECURE_PROXY_ROUTES=1. Without it, route configs
+        with skip_cert_verify=True log a warning AND are downgraded to full
+        verification at runtime — fail-secure regardless of config drift.
+        """
         if route.path_prefix not in self._ssl_contexts:
             ctx = ssl.create_default_context()
             if route.skip_cert_verify:
-                ctx.check_hostname = False
-                ctx.verify_mode = ssl.CERT_NONE
+                allow_insecure = os.environ.get(
+                    "JIUWENBOX_ALLOW_INSECURE_PROXY_ROUTES", ""
+                ).strip().lower() in {"1", "true", "yes", "on", "enabled"}
+                if allow_insecure:
+                    logger.warning(
+                        "[security] proxy route %s configured with skip_cert_verify=True "
+                        "and JIUWENBOX_ALLOW_INSECURE_PROXY_ROUTES=1 — TLS is DISABLED on "
+                        "this route. Any host on the network path can MITM the upstream "
+                        "connection. This mode must not be used in production.",
+                        route.path_prefix,
+                    )
+                    ctx.check_hostname = False
+                    ctx.verify_mode = ssl.CERT_NONE
+                else:
+                    logger.warning(
+                        "[security] proxy route %s configured with skip_cert_verify=True "
+                        "but JIUWENBOX_ALLOW_INSECURE_PROXY_ROUTES is not set — config "
+                        "value IGNORED, route uses default TLS verification. Set the env "
+                        "var to honor the config.",
+                        route.path_prefix,
+                    )
             self._ssl_contexts[route.path_prefix] = ctx
         return self._ssl_contexts[route.path_prefix]
 
