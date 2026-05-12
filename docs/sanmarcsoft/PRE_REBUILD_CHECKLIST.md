@@ -17,6 +17,43 @@ that the codebase cannot enforce by itself.
 
 Do **not** rebuild the VM until every item below is checked off.
 
+### 0. Required env vars in the VM systemd unit
+
+Multiple post-merge RedTeam fixes are gated on env vars that the operator
+sets at deploy time. **Add ALL of these to the `openclaw-vm.service` (or
+equivalent) `Environment=` block:**
+
+```ini
+# OTel (RedTeam B1) — disable bundled OTLP exporters
+Environment="OTEL_SDK_DISABLED=true"
+
+# WebSocket origin check (RedTeam F6) — deploy hostname for the default allowlist
+Environment="JIUWENCLAW_WS_DEPLOY_HOST=haus.matthewstevens.org"
+
+# (Optional) explicit override of the entire allowlist if more hosts are
+# needed beyond localhost + JIUWENCLAW_WS_DEPLOY_HOST:
+# Environment="JIUWENCLAW_WS_ALLOWED_ORIGIN_HOSTS=haus.matthewstevens.org,internal.lan"
+```
+
+**Do NOT set these without explicit security review:**
+
+```ini
+# RedTeam F1 — would re-enable TLS-bypass on skill downloads:
+# Environment="JIUWENCLAW_INSECURE_SKILL_DOWNLOADS=1"
+
+# RedTeam F2 — would re-enable TLS-bypass on proxy routes flagged
+# skip_cert_verify=True:
+# Environment="JIUWENBOX_ALLOW_INSECURE_PROXY_ROUTES=1"
+
+# RedTeam F5 — would disable TLS verify on search/web_fetch:
+# Environment="FREE_SEARCH_SSL_VERIFY=0"
+# Environment="JIUWENCLAW_SSL_VERIFY=0"
+```
+
+Each of these flips a Sanmarcsoft hardening default. They exist for
+emergency self-signed-mirror scenarios and must NOT live in a production
+unit file.
+
 ### 1. OTLP exporters disabled at VM startup (RedTeam B1)
 
 `opentelemetry-exporter-otlp-proto-grpc` and `opentelemetry-exporter-otlp-proto-http`
