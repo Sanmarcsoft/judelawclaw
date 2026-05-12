@@ -99,11 +99,19 @@ class IMOutboundPipeline:
             from openjiuwen.core.foundation.llm import Model
             from openjiuwen.core.foundation.llm.schema.config import ModelClientConfig, ModelRequestConfig
 
+            # SECURITY (Sanmarcsoft post-merge gateway RedTeam, GW-HIGH-4):
+            # Upstream hardcoded verify_ssl=False on the IM outbound LLM client.
+            # Now: default True; private self-signed mirrors must opt out
+            # via the global JIUWENCLAW_SSL_VERIFY=0 env var.
+            verify_ssl = (
+                os.environ.get("JIUWENCLAW_SSL_VERIFY", "").strip().lower()
+                not in {"0", "false", "no", "off"}
+            )
             client_config = ModelClientConfig(
                 client_provider=client_provider,
                 api_key=api_key,
                 api_base=api_base,
-                verify_ssl=False,
+                verify_ssl=verify_ssl,
                 custom_headers=custom_headers,
             )
             model_config = ModelRequestConfig(

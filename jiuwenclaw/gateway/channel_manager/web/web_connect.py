@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import ipaddress
 import json
 import logging
 import os
@@ -20,6 +21,39 @@ from typing import Any, Awaitable, Callable
 from urllib.parse import parse_qs, urlparse
 
 import aiohttp
+
+
+# SECURITY (Sanmarcsoft post-merge gateway RedTeam, GW-HIGH-2):
+# Upstream _download_file fetched any URL the client supplied (SSRF) and
+# _process_files joined the client-supplied filename onto workspace_dir
+# without basename / containment (arbitrary-write path traversal). Helpers
+# below close both gaps.
+
+def _validate_remote_file_url(url: str) -> bool:
+    """Reject URLs that aren't safe to fetch as user-supplied file sources."""
+    try:
+        parsed = urlparse(url)
+    except (TypeError, ValueError):
+        return False
+    if parsed.scheme not in ("http", "https"):
+        return False
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return False
+    try:
+        addr = ipaddress.ip_address(host)
+        if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_multicast:
+            return False
+    except ValueError:
+        pass  # hostname (not IP) — accept; resolver hardening is a separate concern
+    return True
+
+
+def _safe_filename(raw: str) -> str:
+    """Strip directory components and leading dots; never returns empty."""
+    name = os.path.basename(str(raw or "")).lstrip(".")
+    name = name.replace("/", "_").replace("\\", "_").replace("\x00", "_")
+    return name or "unknown_file"
 
 from jiuwenclaw.common.utils import get_agent_workspace_dir
 from jiuwenclaw.gateway.channel_manager.base import BaseChannel, ChannelMetadata, RobotMessageRouter
@@ -174,6 +208,10 @@ class WebChannel(BaseChannel):
         await self._broadcast(frame)
 
     async def _download_file(self, url: str) -> bytes | None:
+        # SECURITY (GW-HIGH-2): reject SSRF-shaped URLs before any fetch.
+        if not _validate_remote_file_url(url):
+            logger.warning("WebChannel _download_file: URL rejected by SSRF guard: %s", url)
+            return None
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url) as response:
@@ -192,7 +230,7 @@ class WebChannel(BaseChannel):
             return params
 
         downloaded_files = []
-        workspace_dir = str(get_agent_workspace_dir())
+        workspace_dir = os.path.realpath(str(get_agent_workspace_dir()))
 
         for file_info in files:
             if not isinstance(file_info, dict):
@@ -200,14 +238,28 @@ class WebChannel(BaseChannel):
                 continue
 
             file_url = file_info.get("url") or file_info.get("uri") or ""
-            file_name = file_info.get("name") or file_info.get("filename") or "unknown_file"
+            # SECURITY (GW-HIGH-2): sanitize filename to basename to prevent
+            # client-supplied path traversal writing outside the workspace.
+            file_name = _safe_filename(
+                file_info.get("name") or file_info.get("filename") or "unknown_file"
+            )
 
             if file_url:
                 file_content = await self._download_file(file_url)
                 if file_content:
                     try:
                         os.makedirs(workspace_dir, exist_ok=True)
-                        file_path = os.path.join(workspace_dir, file_name)
+                        file_path = os.path.realpath(os.path.join(workspace_dir, file_name))
+                        # Paranoid containment check: even after _safe_filename
+                        # + realpath, refuse to write outside workspace_dir.
+                        if not (file_path == workspace_dir or
+                                file_path.startswith(workspace_dir + os.sep)):
+                            logger.warning(
+                                "WebChannel _process_files: path containment failed "
+                                "for %r (resolved %r)", file_name, file_path,
+                            )
+                            downloaded_files.append(file_info)
+                            continue
                         with open(file_path, "wb") as f:
                             f.write(file_content)
                         file_info["path"] = file_path
