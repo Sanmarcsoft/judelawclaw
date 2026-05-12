@@ -358,12 +358,38 @@ class GatewayServer:
         except Exception:  # pragma: no cover
             from websockets import serve as ws_serve
 
+        # SECURITY (Sanmarcsoft post-merge gateway RedTeam, GW-MEDIUM-4):
+        # GatewayServer (port 19001 — internal /acp, /tui, /cli routes) had
+        # no Origin check. WebChannel had one; this one was missed by the
+        # upstream merge. Apply the same check now.
+        from jiuwenclaw.common.security.ws_origin import (
+            extract_handshake_request,
+            forbidden_origin_response,
+            get_header_value,
+            is_origin_check_enabled,
+            is_allowed_browser_origin,
+        )
+
+        async def _process_request(*args):  # signature varies by websockets ver
+            if not is_origin_check_enabled():
+                return None
+            path, headers = extract_handshake_request(args)
+            origin = get_header_value(headers, "Origin")
+            if not is_allowed_browser_origin(origin):
+                logger.warning(
+                    "[GatewayServer] rejecting connection from origin=%r path=%r",
+                    origin, path,
+                )
+                return forbidden_origin_response(args)
+            return None
+
         self._server = await ws_serve(
             self._connection_handler,
             self.config.host,
             self.config.port,
             ping_interval=20,
             ping_timeout=600,
+            process_request=_process_request,
         )
         self._running = True
         paths = ", ".join(self.config.routes.keys())
