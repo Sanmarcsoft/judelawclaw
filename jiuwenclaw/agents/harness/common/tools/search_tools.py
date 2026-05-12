@@ -51,7 +51,12 @@ def _env_flag(name: str, default: bool = False) -> bool:
 
 
 def _free_search_ssl_verify() -> bool:
-    return _env_bool(_FREE_SEARCH_SSL_VERIFY_ENV, default=False)
+    # SECURITY (Sanmarcsoft hardening 2026-05-12, RedTeam F5-pair):
+    # Upstream default was False (skip TLS verification on outbound search).
+    # All supported free-search providers (DuckDuckGo, Jina, etc.) are public
+    # HTTPS with valid certs. Default flipped to True. Set FREE_SEARCH_SSL_VERIFY=0
+    # to restore the insecure behaviour for a private self-signed mirror.
+    return _env_bool(_FREE_SEARCH_SSL_VERIFY_ENV, default=True)
 
 
 def _disable_insecure_request_warning() -> None:

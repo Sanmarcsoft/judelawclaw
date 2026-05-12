@@ -62,7 +62,11 @@ def _env_bool(name: str, default: bool = True) -> bool:
 
 
 def _free_search_ssl_verify() -> bool:
-    return _env_bool(_FREE_SEARCH_SSL_VERIFY_ENV, default=False)
+    # SECURITY (Sanmarcsoft hardening 2026-05-12, RedTeam F5-pair):
+    # Upstream default was False (skip TLS verification on outbound webfetch).
+    # Web fetch targets are public HTTPS pages with valid certs. Default flipped
+    # to True. Set FREE_SEARCH_SSL_VERIFY=0 for a private self-signed mirror.
+    return _env_bool(_FREE_SEARCH_SSL_VERIFY_ENV, default=True)
 
 
 def _disable_insecure_request_warning() -> None:
