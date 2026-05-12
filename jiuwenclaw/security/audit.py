@@ -25,14 +25,15 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import json
 import logging
 import os
 import re
+import time
 from datetime import datetime, timezone
-from typing import Any, Iterable, Optional
-
-import httpx
+from functools import wraps
+from typing import Any, Awaitable, Callable, Iterable, Optional, TypeVar
 
 logger = logging.getLogger(__name__)
 
@@ -216,6 +217,84 @@ def audit_tool_call(
         asyncio.run(_write_audit_entry(doc, meta, doc_id))
 
     threading.Thread(target=_runner, daemon=True, name="audit-write").start()
+
+
+F = TypeVar("F", bound=Callable[..., Any])
+
+
+def audited(fn: F) -> F:
+    """Decorator that fires :func:`audit_tool_call` around a tool function.
+
+    Compose UNDER ``openjiuwen``'s ``@tool`` decorator so the audit wraps the raw
+    function body but the upstream tool registration still sees the wrapped
+    callable as the registered tool:
+
+        @tool(name="mcp_exec_command", description="…")
+        @audited
+        async def mcp_exec_command(command: str, …) -> str: ...
+
+    Honors the upstream string-return-error convention: if the function returns
+    a string beginning with ``"[ERROR]"``, the audit outcome is recorded as
+    ``"error"`` rather than ``"success"`` and the first 200 chars of the return
+    are stored as the error message. Exceptions are re-raised; an exception
+    path always records ``outcome="error"``.
+
+    The decorator is reusable across sync and async functions.
+    """
+    fn_name = getattr(fn, "__name__", "unknown")
+
+    def _record(
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+        result: Any,
+        exc: Optional[BaseException],
+        t0: float,
+    ) -> None:
+        outcome = "success"
+        err: Optional[str] = None
+        if exc is not None:
+            outcome = "error"
+            err = f"{type(exc).__name__}: {exc}"
+        elif isinstance(result, str) and result.startswith("[ERROR]"):
+            outcome = "error"
+            err = result[:200]
+        audit_tool_call(
+            tool_name=fn_name,
+            tool_args={"args": list(args), "kwargs": dict(kwargs)},
+            outcome=outcome,
+            error_message=err,
+            duration_ms=(time.time() - t0) * 1000.0,
+        )
+
+    if inspect.iscoroutinefunction(fn):
+
+        @wraps(fn)
+        async def aw(*args: Any, **kwargs: Any) -> Any:
+            t0 = time.time()
+            try:
+                result = await fn(*args, **kwargs)
+            except BaseException as exc:
+                _record(args, kwargs, None, exc, t0)
+                raise
+            else:
+                _record(args, kwargs, result, None, t0)
+                return result
+
+        return aw  # type: ignore[return-value]
+
+    @wraps(fn)
+    def sw(*args: Any, **kwargs: Any) -> Any:
+        t0 = time.time()
+        try:
+            result = fn(*args, **kwargs)
+        except BaseException as exc:
+            _record(args, kwargs, None, exc, t0)
+            raise
+        else:
+            _record(args, kwargs, result, None, t0)
+            return result
+
+    return sw  # type: ignore[return-value]
 
 
 MAX_BATCH_TARGETS: int = int(os.environ.get("MAX_BATCH_TARGETS", "5"))

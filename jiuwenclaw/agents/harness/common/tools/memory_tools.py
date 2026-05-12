@@ -10,6 +10,8 @@ from typing import Optional, Dict, Any, List
 
 from openjiuwen.core.foundation.tool.tool import tool
 
+from jiuwenclaw.security.audit import audited
+
 from ..memory import (
     MemoryIndexManager,
     MemorySettings,
@@ -168,6 +170,7 @@ async def _ensure_global_manager() -> bool:
     name="memory_search",
     description="在长期记忆系统中搜索用户的记忆信息。在回答关于之前的工作内容、决策、日期、人物、偏好或待办事项的问题之前，必须先调用此工具。",
 )
+@audited  # Sanmarcsoft Round-2: per-call audit-write to ChromaDB
 async def memory_search(
     query: str,
     maxResults: Optional[int] = None,
@@ -235,6 +238,7 @@ async def memory_search(
 
 
 @tool
+@audited  # Sanmarcsoft Round-2: per-call audit-write to ChromaDB
 async def memory_get(
     path: str,
     from_line: Optional[int] = None,
@@ -288,6 +292,7 @@ async def memory_get(
 
 
 @tool
+@audited  # Sanmarcsoft Round-2: per-call audit-write to ChromaDB
 async def write_memory(
     path: str,
     content: str,
@@ -349,6 +354,7 @@ async def write_memory(
 
 
 @tool
+@audited  # Sanmarcsoft Round-2: per-call audit-write to ChromaDB
 async def edit_memory(
     path: str,
     oldText: str,
@@ -429,6 +435,7 @@ async def edit_memory(
 
 
 @tool
+@audited  # Sanmarcsoft Round-2: per-call audit-write to ChromaDB
 async def read_memory(
     path: str,
     offset: Optional[int] = None,

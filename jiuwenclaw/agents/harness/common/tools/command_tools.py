@@ -17,6 +17,7 @@ from typing import Sequence
 from openjiuwen.core.foundation.tool import tool
 
 from jiuwenclaw.common.utils import get_agent_workspace_dir
+from jiuwenclaw.security.audit import audited
 
 
 _DANGEROUS_COMMAND_PATTERNS: list[tuple[re.Pattern[str], str]] = [
@@ -234,6 +235,7 @@ def _run_command_background(
         "Returns JSON: exit_code/stdout/stderr (blocking) or pid/status (background)."
     ),
 )
+@audited  # Sanmarcsoft Round-2: per-call audit-write to ChromaDB
 async def mcp_exec_command(
     command: str,
     timeout_seconds: int = 300,

@@ -14,6 +14,8 @@ import requests
 import urllib3
 from openjiuwen.core.foundation.tool import tool
 
+from jiuwenclaw.security.audit import audited
+
 _USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -234,6 +236,7 @@ def _fetch_webpage_sync(url: str, timeout_seconds: int) -> dict[str, str | int]:
         "Use a larger timeout_seconds for slow websites."
     ),
 )
+@audited  # Sanmarcsoft Round-2: per-call audit-write to ChromaDB
 async def mcp_fetch_webpage(url: str, max_chars: int = 0, timeout_seconds: int = 30) -> str:
     url = _normalize_url(url)
     if not url:

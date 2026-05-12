@@ -16,6 +16,7 @@ import requests
 import urllib3
 from openjiuwen.core.foundation.tool import tool
 
+from jiuwenclaw.security.audit import audited
 from jiuwenclaw.agents.harness.common.tools.ssl_config import get_requests_verify
 
 _USER_AGENT = (
@@ -502,6 +503,7 @@ def _jina_search_sync(query: str, timeout_seconds: int) -> dict[str, Any]:
     name="mcp_free_search",
     description="Free search via DuckDuckGo. Input query and return ranked URLs with snippets.",
 )
+@audited  # Sanmarcsoft Round-2: per-call audit-write to ChromaDB
 async def mcp_free_search(query: str, max_results: int = 8, timeout_seconds: int = 20) -> str:
     query = (query or "").strip()
     if not query:
@@ -532,6 +534,7 @@ async def mcp_free_search(query: str, max_results: int = 8, timeout_seconds: int
     name="mcp_paid_search",
     description="Paid search via Bocha/Perplexity/SERPER/JINA. Support provider=auto|bocha|perplexity|serper|jina.",
 )
+@audited  # Sanmarcsoft Round-2: per-call audit-write to ChromaDB
 async def mcp_paid_search(
     query: str,
     provider: str = "auto",
