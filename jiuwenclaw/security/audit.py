@@ -59,15 +59,49 @@ _HTTP_TIMEOUT_SECONDS = 3.0
 _collection_id: Optional[str] = None
 
 
-_REVERSIBILITY_IRREVERSIBLE = re.compile(r"^(close|trash|delete|remove|drop|destroy)", re.IGNORECASE)
-_REVERSIBILITY_EXTERNAL_MUTATION = re.compile(
-    r"^(archive|label|unlabel|mark|create|send|push|update|set|patch)", re.IGNORECASE
+# Tool names in this codebase follow two conventions:
+#   1. portfolio-agent style: <verb>_<object>            (e.g. "delete_issue")
+#   2. openclaw style:        <namespace>_<verb>_<object> (e.g. "feishu_send_message")
+# Switched from regex-prefix matching to token-set matching: split tool name on
+# '_' and check intersection with the verb sets. This handles both styles and
+# avoids the underscore-is-word-char problem with \b in Python's re module.
+_IRREVERSIBLE_VERBS = frozenset({
+    "close", "trash", "delete", "remove", "drop", "destroy",
+    "terminate", "kill", "unlink", "purge", "truncate", "format",
+})
+_EXTERNAL_MUTATION_VERBS = frozenset({
+    "archive", "label", "unlabel", "mark", "create", "send", "push",
+    "update", "set", "patch", "post", "put", "notify", "publish",
+    "broadcast", "reply", "write", "edit", "modify",
+})
+_READ_VERBS = frozenset({
+    "get", "list", "query", "check", "read", "search", "brief",
+    "summary", "sync", "inspect", "preview", "peek", "describe",
+    "status", "show", "fetch", "find", "browse",
+})
+
+
+def _tokens(tool_name: str) -> set[str]:
+    return {t for t in re.split(r"[_\-:.]", tool_name.lower()) if t}
+# Domain-aware blast radius — Sanmarcsoft OpenClaw tool surface includes the
+# Chinese messaging channel handlers (lark/feishu/dingtalk/wecom/wechat/xiaoyi)
+# plus the legacy portfolio-agent channels (gmail/email/matrix/github). All are
+# external-blast: a tool call escapes to a third-party system.
+_BLAST_EXTERNAL = re.compile(
+    r"(gmail|email|matrix|github|lark|feishu|dingtalk|wecom|wechat|xiaoyi|telegram|discord|huawei|obs|s3|slack)",
+    re.IGNORECASE,
 )
-_REVERSIBILITY_READ = re.compile(
-    r"^(get|list|query|check|read|search|brief|summary|sync|inspect|preview)", re.IGNORECASE
+# Local-state blast — touches our own infrastructure but not third-parties.
+_BLAST_LOCAL_STATE = re.compile(
+    r"(portfolio|chroma|memory|skill_|workspace|evolution|telemetry|agent_zorin|agent_007|agent_q|agent_moneypenny)",
+    re.IGNORECASE,
 )
-_BLAST_EXTERNAL = re.compile(r"(gmail|email|matrix|github)", re.IGNORECASE)
-_BLAST_LOCAL_STATE = re.compile(r"(portfolio|chroma)", re.IGNORECASE)
+# Shell/exec/runtime blast — process-spawning side. Most dangerous of the
+# "internal" bucket because it's the canonical local-RCE primitive.
+_BLAST_SHELL = re.compile(
+    r"(mcp_exec_command|exec_command|run_command|shell|subprocess|landlock|sandbox)",
+    re.IGNORECASE,
+)
 
 
 def _hash(value: Any) -> str:
@@ -79,16 +113,24 @@ def _hash(value: Any) -> str:
 
 
 def classify_reversibility(tool_name: str) -> str:
-    if _REVERSIBILITY_IRREVERSIBLE.match(tool_name):
+    tokens = _tokens(tool_name)
+    # Severity-ordered: irreversible first so 'close' in a mixed name like
+    # 'archive_and_close_issue' classifies at the worst level.
+    if tokens & _IRREVERSIBLE_VERBS:
         return "irreversible"
-    if _REVERSIBILITY_EXTERNAL_MUTATION.match(tool_name):
+    if tokens & _EXTERNAL_MUTATION_VERBS:
         return "external-source-mutation"
-    if _REVERSIBILITY_READ.match(tool_name):
+    if tokens & _READ_VERBS:
         return "reversible"
     return "unknown"
 
 
 def classify_blast_radius(tool_name: str) -> str:
+    # Shell-spawn tools are the highest-blast internal bucket; check first
+    # so something like "mcp_exec_command" doesn't get mis-classified by a
+    # later regex match.
+    if _BLAST_SHELL.search(tool_name):
+        return "shell"
     if _BLAST_EXTERNAL.search(tool_name):
         return "external"
     if _BLAST_LOCAL_STATE.search(tool_name):
