@@ -29,10 +29,10 @@ COPY docker/requirements.txt ./docker/requirements.txt
 COPY src ./src
 COPY configs ./configs
 
-RUN pip install --break-system-packages --upgrade -i https://pypi.tuna.tsinghua.edu.cn/simple build setuptools wheel \
-    && pip install --break-system-packages -i https://pypi.tuna.tsinghua.edu.cn/simple -r ./docker/requirements.txt \
+RUN pip install --break-system-packages --upgrade build setuptools wheel \
+    && pip install --break-system-packages -r ./docker/requirements.txt \
     && python3 -m build --wheel --no-isolation \
-    && pip install --break-system-packages -i https://pypi.tuna.tsinghua.edu.cn/simple dist/jiuwenbox-*.whl
+    && pip install --break-system-packages dist/jiuwenbox-*.whl
 
 RUN ln -s /usr/bin/python3 /usr/bin/python
 
