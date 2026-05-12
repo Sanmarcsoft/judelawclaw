@@ -39,7 +39,21 @@ def get_define_value_from_file(filepath: str, macro_name: str):
                 m = pattern.match(line)
                 if m:
                     expr = m.group(1).strip().strip("()")
-                    return eval(expr, {"__builtins__": {}, "True": True, "False": False})
+                    # SECURITY (Sanmarcsoft hardening 2026-05-12, RedTeam F4):
+                    # Upstream used eval(expr, {"__builtins__": {}, ...}). The
+                    # {"__builtins__": {}} sandbox is known-bypassable via gadget
+                    # chains like ().__class__.__bases__[0].__subclasses__().
+                    # Replaced with a literal-only parser: bool + int/hex/oct/bin.
+                    # Compound expressions (e.g. "1<<2") previously supported now
+                    # return None — accept the regression for safety.
+                    if expr == "True":
+                        return True
+                    if expr == "False":
+                        return False
+                    try:
+                        return int(expr, 0)
+                    except (TypeError, ValueError):
+                        return None
     except Exception as exc:
         logger.debug("could not parse macro from %s: %s", path, exc)
     return None
