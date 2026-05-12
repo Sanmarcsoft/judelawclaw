@@ -166,6 +166,13 @@ def build_status_body(status: str) -> dict[str, Any]:
     return {STATUS_FIELD: status}
 
 
+# SECURITY (Sanmarcsoft post-merge a2x RedTeam, A2X-MEDIUM-1):
+# Endpoint values are URI strings that the team leader will connect to.
+# Without a scheme allowlist, an attacker who can register a card can
+# coerce the leader into following file://, gopher://, javascript:, etc.
+_ALLOWED_ENDPOINT_SCHEMES = frozenset({"tcp", "http", "https", "ws", "wss"})
+
+
 def build_blank_agent_card(endpoint: str) -> dict[str, Any]:
     """Blank-agent AgentCard template.
 
@@ -178,9 +185,21 @@ def build_blank_agent_card(endpoint: str) -> dict[str, Any]:
 
     ``status`` is set to ``online`` so the agent is immediately visible
     to ``status=online`` filters.
+
+    The endpoint scheme is validated against ``_ALLOWED_ENDPOINT_SCHEMES``
+    so the leader cannot be coerced into following unsafe URI schemes.
+    Endpoints without a scheme (host:port shape) are accepted as-is for
+    backward compat.
     """
     if not isinstance(endpoint, str) or not endpoint.strip():
         raise ValueError(f"endpoint must be a non-empty string, got {endpoint!r}")
+    import urllib.parse  # local import — avoid top-level coupling
+    parsed = urllib.parse.urlparse(endpoint)
+    if parsed.scheme and parsed.scheme not in _ALLOWED_ENDPOINT_SCHEMES:
+        raise ValueError(
+            f"endpoint scheme {parsed.scheme!r} is not allowed. "
+            f"Permitted: {sorted(_ALLOWED_ENDPOINT_SCHEMES)}"
+        )
     return {
         "name": f"{BLANK_AGENT_NAME_PREFIX}{endpoint}",
         "description": BLANK_DESCRIPTION_SENTINEL,

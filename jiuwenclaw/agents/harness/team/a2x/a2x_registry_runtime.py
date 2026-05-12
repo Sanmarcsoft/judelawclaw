@@ -119,6 +119,19 @@ def resolve_a2x_config(config_base: dict[str, Any]) -> dict[str, Any]:
         timeout = 30.0
 
     api_key = str(a2x_cfg.get("api_key") or "").strip() or None
+    # SECURITY (Sanmarcsoft post-merge a2x RedTeam, A2X-HIGH-1):
+    # When base_url points to a non-loopback host, api_key MUST be set.
+    # Without this, the registry runs on a network-trust model — any
+    # co-tenant on the same network can register fake blank agents and
+    # the leader will reserve and connect to attacker-controlled endpoints.
+    host = (parsed.hostname or "").lower()
+    is_loopback = host in {"127.0.0.1", "::1", "localhost"}
+    if not is_loopback and not api_key:
+        raise ValueError(
+            f"react.a2x_registry.api_key is required when base_url points to a "
+            f"non-loopback host ({host!r}). Set api_key to a secret value or "
+            f"move the registry behind 127.0.0.1."
+        )
     ownership_file = a2x_cfg.get("ownership_file", False)
     dataset = str(a2x_cfg.get("dataset") or "").strip() or None
     role = str(a2x_cfg.get("role") or "teammate").strip().lower()
