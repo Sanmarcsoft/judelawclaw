@@ -6,7 +6,7 @@ from __future__ import annotations
 import enum
 import os
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Optional
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -148,6 +148,15 @@ class FilesystemPolicy(BaseModel):
 class ProcessPolicy(BaseModel):
     run_as_user: str = "sandbox"
     run_as_group: str = "sandbox"
+    # SECURITY (Sanmarcsoft post-merge supervisor RedTeam, BOX-HIGH):
+    # Sandbox processes had no resource limits. fork/vfork are NOT in the
+    # seccomp blocklist; clone3 is, but a plain fork-bomb loop using fork()
+    # would exhaust the host PID table. These fields are passed through to
+    # bwrap as --rlimit-{nproc,as,fsize,nofile} when set.
+    rlimit_nproc: Optional[int] = 128
+    rlimit_as_bytes: Optional[int] = 512 * 1024 * 1024      # 512 MiB
+    rlimit_fsize_bytes: Optional[int] = 256 * 1024 * 1024   # 256 MiB
+    rlimit_nofile: Optional[int] = 256
 
 
 class NamespacePolicy(BaseModel):

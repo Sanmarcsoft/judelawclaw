@@ -103,6 +103,16 @@ class BwrapConfig:
     # seccomp
     seccomp_fd: int | None = None
 
+    # SECURITY (Sanmarcsoft post-merge supervisor RedTeam, BOX-HIGH):
+    # Per-process resource limits — primary defense against fork-bombs
+    # and memory/fd-exhaustion DoS from sandboxed user code. Mapped
+    # from ProcessPolicy.rlimit_* fields and emitted to bwrap via
+    # --rlimit-{nproc,as,fsize,nofile}.
+    rlimit_nproc: int | None = None
+    rlimit_as_bytes: int | None = None
+    rlimit_fsize_bytes: int | None = None
+    rlimit_nofile: int | None = None
+
     # environment
     env: dict[str, str] = field(default_factory=dict)
     workdir: str | None = None
@@ -161,6 +171,11 @@ class BwrapConfig:
             cfg.gid = grp.getgrnam(proc.run_as_group).gr_gid
         except KeyError:
             cfg.gid = 65534
+        # SECURITY (Sanmarcsoft RedTeam BOX-HIGH): propagate per-process rlimits.
+        cfg.rlimit_nproc = proc.rlimit_nproc
+        cfg.rlimit_as_bytes = proc.rlimit_as_bytes
+        cfg.rlimit_fsize_bytes = proc.rlimit_fsize_bytes
+        cfg.rlimit_nofile = proc.rlimit_nofile
 
     @staticmethod
     def _apply_namespace(cfg: BwrapConfig, namespace: NamespacePolicy) -> None:
@@ -318,6 +333,19 @@ class BwrapConfig:
 
         if self.seccomp_fd is not None:
             args.extend(["--seccomp", str(self.seccomp_fd)])
+
+        # SECURITY (Sanmarcsoft RedTeam BOX-HIGH): per-process resource limits.
+        # bwrap >=0.7 supports --rlimit-* flags; older bwrap will reject these
+        # and the sandbox will fail to start, which is the intended behaviour
+        # (fail-loud rather than launch unlimited).
+        if self.rlimit_nproc is not None:
+            args.extend(["--rlimit-nproc", str(self.rlimit_nproc)])
+        if self.rlimit_as_bytes is not None:
+            args.extend(["--rlimit-as", str(self.rlimit_as_bytes)])
+        if self.rlimit_fsize_bytes is not None:
+            args.extend(["--rlimit-fsize", str(self.rlimit_fsize_bytes)])
+        if self.rlimit_nofile is not None:
+            args.extend(["--rlimit-nofile", str(self.rlimit_nofile)])
 
         if self.workdir:
             args.extend(["--chdir", self.workdir])
